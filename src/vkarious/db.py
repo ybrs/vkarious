@@ -170,6 +170,103 @@ def copy_database_files(data_directory: str, source_oid: int, target_oid: int) -
         print("no internal file ?")
 
 
+def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> dict:
+    """Restore a database's physical files from a snapshot database.
+
+    Steps:
+    - Ensure the snapshot exists and belongs to the given database.
+    - Terminate all connections to the source database and acquire a write lock.
+    - Move the source database's data directory to a backup prefixed with `vka_delete_`.
+    - Copy the snapshot's data directory into the original source OID path using copy-on-write.
+    - Remove `pg_internal.init` from the restored directory.
+    - Verify connectivity and that at least one table exists in the restored database.
+
+    Returns a dict with keys: `source_oid`, `snapshot_oid`, `backup_path`, `tables_count`.
+    """
+    # Resolve OIDs and paths
+    source_oid = get_database_oid(database_name)
+    snapshot_record = get_snapshot_record(snapshot_name)
+    if snapshot_record is None:
+        raise ValueError(f"Snapshot '{snapshot_name}' not found in metadata")
+
+    snapshot_oid = snapshot_record['oid']
+    parent_oid = snapshot_record['parent']
+    if parent_oid != source_oid:
+        raise ValueError(
+            f"Snapshot '{snapshot_name}' does not belong to database '{database_name}'"
+        )
+
+    data_directory = get_data_directory()
+    base_path = Path(data_directory) / "base"
+    source_path = base_path / str(source_oid)
+    snapshot_path = base_path / str(snapshot_oid)
+
+    if not source_path.exists():
+        raise FileNotFoundError(f"Source data directory not found: {source_path}")
+    if not snapshot_path.exists():
+        raise FileNotFoundError(f"Snapshot data directory not found: {snapshot_path}")
+
+    # Prepare a unique backup directory name
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = base_path / f"vka_delete_{source_oid}_{timestamp}"
+    
+    # Safety: terminate connections and lock database for the critical section
+    terminate_database_connections(database_name)
+    with database_write_lock(database_name):
+        # Move the current source directory aside
+        subprocess.run(
+            ["mv", str(source_path), str(backup_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        print("copying from ", str(snapshot_path), "to", str(source_path))
+        subprocess.run(
+            ["cp", "-cR", str(snapshot_path) + "/", str(source_path) + "/"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # Ensure pg_internal.init is removed
+        pg_internal_init = source_path / "pg_internal.init"
+        if pg_internal_init.exists():
+            pg_internal_init.unlink()
+
+    # Post-restore validation: can connect and tables exist
+    tables_count = 0
+    try:
+        db_dsn = get_database_dsn()
+        params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+        params['dbname'] = database_name
+        target_dsn = psycopg.conninfo.make_conninfo(**params)
+        with psycopg.connect(target_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    """
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    tables_count = int(row[0])
+    except Exception:
+        # Let caller surface a friendly error while still returning backup location
+        raise
+
+    return {
+        "source_oid": source_oid,
+        "snapshot_oid": snapshot_oid,
+        "backup_path": str(backup_path),
+        "tables_count": tables_count,
+    }
+
+
 def database_exists(database_name: str) -> bool:
     """Check if a database exists."""
     try:

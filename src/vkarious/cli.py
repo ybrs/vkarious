@@ -18,6 +18,7 @@ from .db import (
     get_database_oid,
     get_databases_with_snapshots,
     get_snapshot_record,
+    restore_database_from_snapshot,
     initialize_database,
     list_databases,
     register_snapshot_database,
@@ -149,13 +150,40 @@ def delete_snapshot(snapshot_name: str) -> None:
         click.echo(f"Error deleting snapshot: {e}", err=True)
         raise click.ClickException(str(e))
 
-
-@cli.command()
+@snapshots.command(name="restore")
 @click.argument("database_name")
-@click.argument("snapshot_id")
-def restore(database_name: str, snapshot_id: str) -> None:
-    """Restore DATABASE_NAME from SNAPSHOT_ID."""
-    run_command(["echo", f"Restoring {database_name} from {snapshot_id}"])
+@click.argument("snapshot_name")
+def restore_snapshot_cmd(database_name: str, snapshot_name: str) -> None:
+    """Restore a database from a snapshot's physical files.
+
+    Usage: snapshots restore <database_name> <snapshot_name>
+    """
+    try:
+        click.echo(
+            f"Restoring database '{database_name}' from snapshot '{snapshot_name}'..."
+        )
+
+        details = restore_database_from_snapshot(database_name, snapshot_name)
+
+        click.echo(
+            f"Moved original data directory to: {details['backup_path']}"
+        )
+        click.echo(
+            f"Restored OID {details['source_oid']} from snapshot OID {details['snapshot_oid']}"
+        )
+        click.echo(
+            f"Connected successfully. Public tables found: {details['tables_count']}"
+        )
+        click.echo("Restore completed successfully")
+
+    except Exception as e:
+        try:
+            base = get_data_directory()
+            base_msg = f" Check '{base}/base' for a directory prefixed with 'vka_delete_' containing the original files."
+        except Exception:
+            base_msg = " Original data files were moved aside with a 'vka_delete_' prefix."
+        click.echo(f"Error restoring snapshot: {e}.{base_msg}", err=True)
+        raise click.ClickException(str(e))
 
 
 @cli.group()
