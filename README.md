@@ -2,7 +2,7 @@
 
 vkarious is a tool to get snapshots of PostgreSQL databases.
 
-**Warning:** This project is heavily work in progress.
+Important: This project is an active work-in-progress. Expect rapid changes, occasional instability, and breaking changes as features evolve. To get notified about updates, use the Watch button on the repository (choose "All Activity"). Manage your watch settings for this repo at: https://github.com/ybrs/vkarious/subscription
 
 ## Configuration
 
