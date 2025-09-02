@@ -169,7 +169,7 @@ def restore_snapshot_cmd(database_name: str, snapshot_name: str) -> None:
             f"Moved original data directory to: {details['backup_path']}"
         )
         click.echo(
-            f"Restored OID {details['source_oid']} from snapshot OID {details['snapshot_oid']}"
+            f"Restored database OID {details['restored_oid']} from snapshot OID {details['snapshot_oid']}"
         )
         click.echo(
             f"Connected successfully. Public tables found: {details['tables_count']}"

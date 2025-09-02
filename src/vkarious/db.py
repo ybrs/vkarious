@@ -177,11 +177,12 @@ def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> di
     - Ensure the snapshot exists and belongs to the given database.
     - Terminate all connections to the source database and acquire a write lock.
     - Move the source database's data directory to a backup prefixed with `vka_delete_`.
-    - Copy the snapshot's data directory into the original source OID path using copy-on-write.
-    - Remove `pg_internal.init` from the restored directory.
+    - Drop the source database and recreate a new one with the same name using STRATEGY='FILE_COPY'.
+    - Copy the snapshot's data directory into the new database OID path using copy-on-write.
+    - Remove `pg_internal.init` from the restored directory after copy.
     - Verify connectivity and that at least one table exists in the restored database.
 
-    Returns a dict with keys: `source_oid`, `snapshot_oid`, `backup_path`, `tables_count`.
+    Returns a dict with keys: `source_oid`, `snapshot_oid`, `restored_oid`, `backup_path`, `tables_count`.
     """
     # Resolve OIDs and paths
     source_oid = get_database_oid(database_name)
@@ -210,29 +211,18 @@ def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> di
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = base_path / f"vka_delete_{source_oid}_{timestamp}"
     
-    # Safety: terminate connections and lock database for the critical section
+    # Safety: terminate connections and briefly lock during filesystem move
     terminate_database_connections(database_name)
     with database_write_lock(database_name):
-        # Move the current source directory aside
-        subprocess.run(
-            ["mv", str(source_path), str(backup_path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        subprocess.run(["mv", str(source_path), str(backup_path)], check=True, capture_output=True, text=True)
 
-        print("copying from ", str(snapshot_path), "to", str(source_path))
-        subprocess.run(
-            ["cp", "-cR", str(snapshot_path) + "/", str(source_path) + "/"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    # Drop and recreate the database to clear caches and allocate a new OID
+    drop_database(database_name)
+    create_database_with_strategy(database_name, "FILE_COPY")
+    restored_oid = get_database_oid(database_name)
 
-        # Ensure pg_internal.init is removed
-        pg_internal_init = source_path / "pg_internal.init"
-        if pg_internal_init.exists():
-            pg_internal_init.unlink()
+    # Copy from snapshot OID directory to the new database OID directory
+    copy_database_files(data_directory, snapshot_oid, restored_oid)
 
     # Post-restore validation: can connect and tables exist
     tables_count = 0
@@ -262,6 +252,7 @@ def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> di
     return {
         "source_oid": source_oid,
         "snapshot_oid": snapshot_oid,
+        "restored_oid": restored_oid,
         "backup_path": str(backup_path),
         "tables_count": tables_count,
     }
@@ -284,6 +275,16 @@ def create_database(database_name: str) -> None:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(f'CREATE DATABASE "{database_name}"')
+
+def create_database_with_strategy(database_name: str, strategy: str = "FILE_COPY") -> None:
+    """Create a database using a specific creation strategy.
+
+    Mirrors the behavior used for snapshot creation (e.g., STRATEGY='FILE_COPY').
+    """
+    with connect() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f'''CREATE DATABASE "{database_name}" STRATEGY='{strategy}' ''')
 
 
 def table_exists(table_name: str, database_name: str = "vkarious") -> bool:
