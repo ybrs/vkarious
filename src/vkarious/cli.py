@@ -13,6 +13,7 @@ from .db import (
     database_write_lock,
     get_data_directory,
     get_database_oid,
+    get_databases_with_snapshots,
     initialize_database,
     list_databases,
     register_snapshot_database,
@@ -81,19 +82,30 @@ def snapshots() -> None:
 
 @snapshots.command(name="list")
 def list_snapshots() -> None:
-    """List available snapshots."""
+    """List available snapshots organized by database."""
     try:
-        dbs = list_databases()
-        snapshots = [db for db in dbs if db['name'].startswith('snapshot_')]
+        databases = get_databases_with_snapshots()
         
-        if not snapshots:
-            click.echo("No snapshots available")
+        if not databases:
+            click.echo("No databases with snapshots found")
             return
         
-        click.echo(f"{'OID':<10} {'Snapshot Name'}")
-        click.echo("-" * 50)
-        for snapshot in snapshots:
-            click.echo(f"{snapshot['oid']:<10} {snapshot['name']}")
+        for db_oid, db_info in databases.items():
+            # Show database name with indication if renamed
+            db_name = db_info['current_name']
+            if db_info['current_name'] != db_info['stored_name']:
+                db_name = f"{db_info['current_name']} (was: {db_info['stored_name']})"
+            
+            click.echo(f"\nDatabase: {db_name} (OID: {db_oid})")
+            
+            if not db_info['snapshots']:
+                click.echo("  No snapshots available")
+            else:
+                click.echo(f"  {'OID':<10} {'Snapshot Name':<30} {'Created'}")
+                click.echo("  " + "-" * 60)
+                for snapshot in db_info['snapshots']:
+                    created = snapshot['created_at'].strftime('%Y-%m-%d %H:%M:%S') if snapshot['created_at'] else 'Unknown'
+                    click.echo(f"  {snapshot['oid']:<10} {snapshot['current_name']:<30} {created}")
     except Exception as e:
         click.echo(f"Error listing snapshots: {e}", err=True)
         raise click.ClickException(str(e))

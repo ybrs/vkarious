@@ -292,6 +292,57 @@ def register_snapshot_database(snapshot_name: str, snapshot_oid: int, parent_oid
         conn.commit()
 
 
+def get_databases_with_snapshots() -> dict[str, dict]:
+    """Get databases from vkarious metadata DB with their snapshots in parent-child relationship."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            # Get all databases from vka_databases
+            cur.execute("""
+                SELECT vd.oid, vd.datname, vd.parent, vd.created_at, vd.type,
+                       pg.datname as current_datname
+                FROM vka_databases vd
+                LEFT JOIN pg_database pg ON vd.oid = pg.oid
+                ORDER BY vd.type, vd.created_at
+            """)
+            
+            databases = {}
+            snapshots = {}
+            
+            for row in cur.fetchall():
+                oid, datname, parent, created_at, db_type, current_datname = row
+                
+                # Use current database name if available, fallback to stored name
+                display_name = current_datname or datname
+                
+                db_info = {
+                    'oid': oid,
+                    'stored_name': datname,
+                    'current_name': display_name,
+                    'parent': parent,
+                    'created_at': created_at,
+                    'type': db_type,
+                    'snapshots': []
+                }
+                
+                if db_type == 'source':
+                    databases[oid] = db_info
+                else:  # snapshot
+                    snapshots[oid] = db_info
+            
+            # Organize snapshots under their parent databases
+            for snapshot_oid, snapshot_info in snapshots.items():
+                parent_oid = snapshot_info['parent']
+                if parent_oid in databases:
+                    databases[parent_oid]['snapshots'].append(snapshot_info)
+            
+            return databases
+
+
 def initialize_database() -> None:
     """Initialize the vkarious database and run migrations."""
     # Check if vkarious database exists, create if not
