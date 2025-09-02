@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from contextlib import contextmanager
@@ -167,3 +168,115 @@ def copy_database_files(data_directory: str, source_oid: int, target_oid: int) -
         pg_internal_init.unlink()
     else:
         print("no internal file ?")
+
+
+def database_exists(database_name: str) -> bool:
+    """Check if a database exists."""
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database_name,))
+                return cur.fetchone() is not None
+    except Exception:
+        return False
+
+
+def create_database(database_name: str) -> None:
+    """Create a database."""
+    with connect() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE DATABASE "{database_name}"')
+
+
+def table_exists(table_name: str, database_name: str = "vkarious") -> bool:
+    """Check if a table exists in the specified database."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = database_name
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    try:
+        with psycopg.connect(target_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_name = %s AND table_schema = 'public'
+                """, (table_name,))
+                return cur.fetchone() is not None
+    except Exception:
+        return False
+
+
+def get_current_version(database_name: str = "vkarious") -> str:
+    """Get the current migration version from vka_dbversion table."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = database_name
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    try:
+        with psycopg.connect(target_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT version FROM vka_dbversion LIMIT 1")
+                result = cur.fetchone()
+                return result[0] if result else '0'
+    except Exception:
+        return '0'
+
+
+def get_latest_migration_version() -> int:
+    """Get the latest migration version from migration files."""
+    migration_dir = Path(__file__).parent / "migration"
+    if not migration_dir.exists():
+        return 0
+    
+    versions = []
+    for file in migration_dir.glob("vkarious_*.sql"):
+        match = re.search(r'vkarious_(\d+)\.sql', file.name)
+        if match:
+            versions.append(int(match.group(1)))
+    
+    return max(versions) if versions else 0
+
+
+def execute_migration(migration_file: Path, database_name: str = "vkarious") -> None:
+    """Execute a migration file against the specified database."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = database_name
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            with open(migration_file, 'r') as f:
+                sql = f.read()
+            cur.execute(sql)
+        conn.commit()
+
+
+def initialize_database() -> None:
+    """Initialize the vkarious database and run migrations."""
+    # Check if vkarious database exists, create if not
+    if not database_exists("vkarious"):
+        create_database("vkarious")
+    
+    # Check if vka_dbversion table exists
+    if not table_exists("vka_dbversion"):
+        # Run initial migration
+        migration_dir = Path(__file__).parent / "migration"
+        initial_migration = migration_dir / "vkarious_1.sql"
+        if initial_migration.exists():
+            execute_migration(initial_migration)
+        return
+    
+    # Check if we need to run additional migrations
+    current_version = int(get_current_version())
+    latest_version = get_latest_migration_version()
+    
+    if current_version < latest_version:
+        migration_dir = Path(__file__).parent / "migration"
+        for version in range(current_version + 1, latest_version + 1):
+            migration_file = migration_dir / f"vkarious_{version}.sql"
+            if migration_file.exists():
+                execute_migration(migration_file)

@@ -13,6 +13,7 @@ from .db import (
     database_write_lock,
     get_data_directory,
     get_database_oid,
+    initialize_database,
     list_databases,
 )
 
@@ -26,6 +27,7 @@ def run_command(command: list[str]) -> None:
 @click.group()
 def cli() -> None:
     """Manage PostgreSQL database snapshots."""
+    initialize_database()
 
 
 @cli.command()
