@@ -10,10 +10,14 @@ from . import __version__
 from .db import (
     copy_database_files,
     create_snapshot_database,
+    database_exists,
     database_write_lock,
+    delete_database_record,
+    drop_database,
     get_data_directory,
     get_database_oid,
     get_databases_with_snapshots,
+    get_snapshot_record,
     initialize_database,
     list_databases,
     register_snapshot_database,
@@ -108,6 +112,41 @@ def list_snapshots() -> None:
                     click.echo(f"  {snapshot['oid']:<10} {snapshot['current_name']:<30} {created}")
     except Exception as e:
         click.echo(f"Error listing snapshots: {e}", err=True)
+        raise click.ClickException(str(e))
+
+
+@snapshots.command(name="delete")
+@click.argument("snapshot_name")
+def delete_snapshot(snapshot_name: str) -> None:
+    """Delete a snapshot by name."""
+    try:
+        click.echo(f"Deleting snapshot '{snapshot_name}'...")
+        
+        # Check if snapshot exists in vka_databases with type 'snapshot'
+        snapshot_record = get_snapshot_record(snapshot_name)
+        if snapshot_record is None:
+            click.echo(f"Error: Snapshot '{snapshot_name}' does not exist", err=True)
+            raise click.ClickException(f"Snapshot '{snapshot_name}' does not exist")
+        
+        # Check if the snapshot database exists
+        if not database_exists(snapshot_name):
+            # Database doesn't exist, remove from vka_databases table and exit with warning
+            delete_database_record(snapshot_name)
+            click.echo(f"Warning: Database '{snapshot_name}' does not exist but was tracked in metadata. Removed from tracking.")
+            return
+        
+        # Drop the database
+        drop_database(snapshot_name)
+        click.echo(f"Dropped database '{snapshot_name}'")
+        
+        # Delete the record from vka_databases
+        delete_database_record(snapshot_name)
+        click.echo(f"Removed record for '{snapshot_name}' from vka_databases")
+        
+        click.echo(f"Snapshot '{snapshot_name}' deleted successfully")
+        
+    except Exception as e:
+        click.echo(f"Error deleting snapshot: {e}", err=True)
         raise click.ClickException(str(e))
 
 

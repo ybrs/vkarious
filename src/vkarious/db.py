@@ -343,6 +343,53 @@ def get_databases_with_snapshots() -> dict[str, dict]:
             return databases
 
 
+def drop_database(database_name: str) -> None:
+    """Drop a database."""
+    with connect() as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+
+
+def get_snapshot_record(snapshot_name: str) -> dict | None:
+    """Get snapshot record from vka_databases table."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT oid, datname, parent, created_at, type 
+                FROM vka_databases 
+                WHERE datname = %s AND type = 'snapshot'
+            """, (snapshot_name,))
+            result = cur.fetchone()
+            if result:
+                return {
+                    'oid': result[0],
+                    'datname': result[1], 
+                    'parent': result[2],
+                    'created_at': result[3],
+                    'type': result[4]
+                }
+            return None
+
+
+def delete_database_record(database_name: str) -> None:
+    """Delete a database record from vka_databases table."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM vka_databases WHERE datname = %s", (database_name,))
+        conn.commit()
+
+
 def initialize_database() -> None:
     """Initialize the vkarious database and run migrations."""
     # Check if vkarious database exists, create if not
