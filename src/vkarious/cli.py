@@ -15,6 +15,8 @@ from .db import (
     get_database_oid,
     initialize_database,
     list_databases,
+    register_snapshot_database,
+    register_source_database,
 )
 
 
@@ -41,6 +43,10 @@ def snapshot(database_name: str) -> None:
         source_oid = get_database_oid(database_name)
         click.echo(f"Source database OID: {source_oid}")
         
+        # Register source database in vka_databases table
+        register_source_database(database_name, source_oid)
+        click.echo(f"Registered source database '{database_name}' in vka_databases")
+        
         # Get PostgreSQL data directory
         data_directory = get_data_directory()
         click.echo(f"PostgreSQL data directory: {data_directory}")
@@ -56,6 +62,10 @@ def snapshot(database_name: str) -> None:
             # Copy database files
             copy_database_files(data_directory, source_oid, target_oid)
             click.echo("Database files copied successfully")
+        
+        # Register snapshot database in vka_databases table
+        register_snapshot_database(snapshot_name, target_oid, source_oid)
+        click.echo(f"Registered snapshot '{snapshot_name}' in vka_databases with parent OID {source_oid}")
         
         click.echo(f"Snapshot completed successfully: {snapshot_name}")
         

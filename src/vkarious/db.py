@@ -255,6 +255,43 @@ def execute_migration(migration_file: Path, database_name: str = "vkarious") -> 
         conn.commit()
 
 
+def register_source_database(database_name: str, oid: int) -> None:
+    """Register a source database in vka_databases table if not already exists."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            # Check if database already exists in vka_databases
+            cur.execute("SELECT 1 FROM vka_databases WHERE oid = %s", (oid,))
+            if cur.fetchone() is None:
+                # Insert the source database record
+                cur.execute("""
+                    INSERT INTO vka_databases (oid, datname, parent, created_at, type) 
+                    VALUES (%s, %s, NULL, %s, 'source')
+                """, (oid, database_name, datetime.now()))
+        conn.commit()
+
+
+def register_snapshot_database(snapshot_name: str, snapshot_oid: int, parent_oid: int) -> None:
+    """Register a snapshot database in vka_databases table."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            # Insert the snapshot database record
+            cur.execute("""
+                INSERT INTO vka_databases (oid, datname, parent, created_at, type) 
+                VALUES (%s, %s, %s, %s, 'snapshot')
+            """, (snapshot_oid, snapshot_name, parent_oid, datetime.now()))
+        conn.commit()
+
+
 def initialize_database() -> None:
     """Initialize the vkarious database and run migrations."""
     # Check if vkarious database exists, create if not
