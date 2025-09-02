@@ -38,7 +38,20 @@ def list_databases() -> list[dict[str, str | int]]:
 
 
 def get_data_directory() -> str:
-    """Get the PostgreSQL data directory path."""
+    """Return the PostgreSQL data directory path.
+
+    If the environment variable `VKA_PG_DATA_PATH` is defined, its value
+    is returned to allow overriding the detected PostgreSQL data directory.
+    This is useful when PostgreSQL is running inside a container while
+    vkarious runs on the host and needs a host-visible path for file
+    operations (e.g., copy-on-write file copying).
+
+    Otherwise falls back to querying the server with `SHOW data_directory`.
+    """
+    override = os.getenv("VKA_PG_DATA_PATH")
+    if override:
+        return override
+
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute("SHOW data_directory")

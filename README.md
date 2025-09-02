@@ -12,6 +12,13 @@ Set the `VKA_DATABASE` environment variable to your PostgreSQL connection string
 export VKA_DATABASE="postgresql://username:password@localhost:5432/database_name"
 ```
 
+Optionally, set `VKA_PG_DATA_PATH` to override the detected PostgreSQL data directory. This is useful when PostgreSQL runs in a container but vkarious runs on the host and needs a host-visible path for copying database files (e.g., COW file copies):
+
+```bash
+# Example: host path where the container's PGDATA is mounted
+export VKA_PG_DATA_PATH="/Users/me/docker-volumes/postgres-data"
+```
+
 ## Usage
 
 List all databases:
@@ -23,6 +30,8 @@ Create a snapshot:
 ```bash
 vkarious snapshot database_name
 ```
+
+When `VKA_PG_DATA_PATH` is set, vkarious uses that directory for physical file operations instead of querying `SHOW data_directory` from PostgreSQL.
 
 List snapshots:
 ```bash
