@@ -194,6 +194,7 @@ def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> di
     - Copy the snapshot's data directory into the new database OID path using copy-on-write.
     - Remove `pg_internal.init` from the restored directory after copy.
     - Verify connectivity and that at least one table exists in the restored database.
+    - Log the restore operation and update the database status to 'restored'.
 
     Returns a dict with keys: `source_oid`, `snapshot_oid`, `restored_oid`, `backup_path`, `tables_count`.
     """
@@ -210,36 +211,42 @@ def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> di
             f"Snapshot '{snapshot_name}' does not belong to database '{database_name}'"
         )
 
-    data_directory = get_data_directory()
-    base_path = Path(data_directory) / "base"
-    source_path = base_path / str(source_oid)
-    snapshot_path = base_path / str(snapshot_oid)
+    # Start logging the restore operation
+    log_id = log_restore_operation(source_oid, None, database_name, "restore", "started")
 
-    if not source_path.exists():
-        raise FileNotFoundError(f"Source data directory not found: {source_path}")
-    if not snapshot_path.exists():
-        raise FileNotFoundError(f"Snapshot data directory not found: {snapshot_path}")
-
-    # Prepare a unique backup directory name
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = base_path / f"vka_delete_{source_oid}_{timestamp}"
-    
-    # Safety: terminate connections and briefly lock during filesystem move
-    terminate_database_connections(database_name)
-    with database_write_lock(database_name):
-        subprocess.run(["mv", str(source_path), str(backup_path)], check=True, capture_output=True, text=True)
-
-    # Drop and recreate the database to clear caches and allocate a new OID
-    drop_database(database_name)
-    create_database_with_strategy(database_name, "FILE_COPY")
-    restored_oid = get_database_oid(database_name)
-
-    # Copy from snapshot OID directory to the new database OID directory
-    copy_database_files(data_directory, snapshot_oid, restored_oid)
-
-    # Post-restore validation: can connect and tables exist
-    tables_count = 0
     try:
+        data_directory = get_data_directory()
+        base_path = Path(data_directory) / "base"
+        source_path = base_path / str(source_oid)
+        snapshot_path = base_path / str(snapshot_oid)
+
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source data directory not found: {source_path}")
+        if not snapshot_path.exists():
+            raise FileNotFoundError(f"Snapshot data directory not found: {snapshot_path}")
+
+        # Prepare a unique backup directory name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = base_path / f"vka_delete_{source_oid}_{timestamp}"
+        
+        # Safety: terminate connections and briefly lock during filesystem move
+        terminate_database_connections(database_name)
+        with database_write_lock(database_name):
+            subprocess.run(["mv", str(source_path), str(backup_path)], check=True, capture_output=True, text=True)
+
+        # Drop and recreate the database to clear caches and allocate a new OID
+        drop_database(database_name)
+        create_database_with_strategy(database_name, "FILE_COPY")
+        restored_oid = get_database_oid(database_name)
+
+        # Update the log with the new OID
+        update_restore_log(log_id, "in_progress")
+        
+        # Copy from snapshot OID directory to the new database OID directory
+        copy_database_files(data_directory, snapshot_oid, restored_oid)
+
+        # Post-restore validation: can connect and tables exist
+        tables_count = 0
         db_dsn = get_database_dsn()
         params = psycopg.conninfo.conninfo_to_dict(db_dsn)
         params['dbname'] = database_name
@@ -258,17 +265,25 @@ def restore_database_from_snapshot(database_name: str, snapshot_name: str) -> di
                 row = cur.fetchone()
                 if row is not None:
                     tables_count = int(row[0])
-    except Exception:
-        # Let caller surface a friendly error while still returning backup location
+        
+        # Update database status to 'restored' after successful validation
+        update_database_status(restored_oid, 'restored')
+        
+        # Update log with success
+        update_restore_log(log_id, "success")
+        
+        return {
+            "source_oid": source_oid,
+            "snapshot_oid": snapshot_oid,
+            "restored_oid": restored_oid,
+            "backup_path": str(backup_path),
+            "tables_count": tables_count,
+        }
+        
+    except Exception as e:
+        # Update log with error
+        update_restore_log(log_id, "error", str(e))
         raise
-
-    return {
-        "source_oid": source_oid,
-        "snapshot_oid": snapshot_oid,
-        "restored_oid": restored_oid,
-        "backup_path": str(backup_path),
-        "tables_count": tables_count,
-    }
 
 
 def database_exists(database_name: str) -> bool:
@@ -380,8 +395,8 @@ def register_source_database(database_name: str, oid: int) -> None:
             if cur.fetchone() is None:
                 # Insert the source database record
                 cur.execute("""
-                    INSERT INTO vka_databases (oid, datname, parent, created_at, type) 
-                    VALUES (%s, %s, NULL, %s, 'source')
+                    INSERT INTO vka_databases (oid, datname, parent, created_at, type, status) 
+                    VALUES (%s, %s, NULL, %s, 'source', 'live')
                 """, (oid, database_name, datetime.now()))
         conn.commit()
 
@@ -397,8 +412,8 @@ def register_snapshot_database(snapshot_name: str, snapshot_oid: int, parent_oid
         with conn.cursor() as cur:
             # Insert the snapshot database record
             cur.execute("""
-                INSERT INTO vka_databases (oid, datname, parent, created_at, type) 
-                VALUES (%s, %s, %s, %s, 'snapshot')
+                INSERT INTO vka_databases (oid, datname, parent, created_at, type, status) 
+                VALUES (%s, %s, %s, %s, 'snapshot', 'live')
             """, (snapshot_oid, snapshot_name, parent_oid, datetime.now()))
         conn.commit()
 
@@ -414,7 +429,7 @@ def get_databases_with_snapshots() -> dict[str, dict]:
         with conn.cursor() as cur:
             # Get all databases from vka_databases
             cur.execute("""
-                SELECT vd.oid, vd.datname, vd.parent, vd.created_at, vd.type,
+                SELECT vd.oid, vd.datname, vd.parent, vd.created_at, vd.type, vd.status,
                        pg.datname as current_datname
                 FROM vka_databases vd
                 LEFT JOIN pg_database pg ON vd.oid = pg.oid
@@ -425,7 +440,13 @@ def get_databases_with_snapshots() -> dict[str, dict]:
             snapshots = {}
             
             for row in cur.fetchall():
-                oid, datname, parent, created_at, db_type, current_datname = row
+                oid, datname, parent, created_at, db_type, status, current_datname = row
+                
+                # Determine if database is defunct (not restored and doesn't exist in pg_database)
+                if status != 'restored' and current_datname is None:
+                    status = 'defunct'
+                    # Update the status in the database
+                    update_database_status(oid, 'defunct')
                 
                 # Use current database name if available, fallback to stored name
                 display_name = current_datname or datname
@@ -437,6 +458,7 @@ def get_databases_with_snapshots() -> dict[str, dict]:
                     'parent': parent,
                     'created_at': created_at,
                     'type': db_type,
+                    'status': status,
                     'snapshots': []
                 }
                 
@@ -488,6 +510,19 @@ def get_snapshot_record(snapshot_name: str) -> dict | None:
             return None
 
 
+def update_database_status(oid: int, status: str) -> None:
+    """Update the status of a database in vka_databases table."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE vka_databases SET status = %s WHERE oid = %s", (status, oid))
+        conn.commit()
+
+
 def delete_database_record(database_name: str) -> None:
     """Delete a database record from vka_databases table."""
     db_dsn = get_database_dsn()
@@ -498,6 +533,49 @@ def delete_database_record(database_name: str) -> None:
     with psycopg.connect(target_dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM vka_databases WHERE datname = %s", (database_name,))
+        conn.commit()
+
+
+def log_restore_operation(old_oid: int, new_oid: int, datname: str, operation: str = "restore", status: str = "started", error_description: str = None) -> int:
+    """Log a restore operation to vka_log table and return the log ID."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            if status == "started":
+                cur.execute("""
+                    INSERT INTO vka_log (old_oid, new_oid, datname, operation, created_at, started_at, status) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (old_oid, new_oid, datname, operation, datetime.now(), datetime.now(), status))
+            else:
+                cur.execute("""
+                    INSERT INTO vka_log (old_oid, new_oid, datname, operation, created_at, status, error_description) 
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (old_oid, new_oid, datname, operation, datetime.now(), status, error_description))
+            log_id = cur.fetchone()[0]
+        conn.commit()
+    return log_id
+
+
+def update_restore_log(log_id: int, status: str, error_description: str = None) -> None:
+    """Update a restore operation log entry."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE vka_log 
+                SET finished_at = %s, status = %s, error_description = %s 
+                WHERE id = %s
+            """, (datetime.now(), status, error_description, log_id))
         conn.commit()
 
 
