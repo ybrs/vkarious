@@ -1,9 +1,9 @@
-task 9
----
-add an environment variable named VKA_PG_DATA_PATH
+Branching
+-----
 
-if defined, this will override the datapath that we find from postgresql for copying db files.
+We need to add "branching" feature.
 
-we will use this env variable with docker compose (or similar setup), vkarious will run on host for cow file copying.
+For now we need you to do the same feature as snapshots. But instead of giving an adhoc name, we need another param from user.
 
-add the variable and then update readme in usage. 
+It needs to register into vka_databases as branch and put an entry to vka_log.
+
