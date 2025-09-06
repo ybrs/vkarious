@@ -199,6 +199,13 @@ def copy_database_files(data_directory: str, source_oid: int, target_oid: int) -
             )
         else:
             raise
+
+    subprocess.run(
+        ["chown", "-R", "postgres:postgres", str(target_path)],
+        check=True,
+        capture_output=True,
+        text=True
+    )
     
     # Remove pg_internal.init file from the copied directory
     pg_internal_init = target_path / "pg_internal.init"
