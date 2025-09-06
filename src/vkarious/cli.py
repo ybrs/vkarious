@@ -9,6 +9,7 @@ import click
 from . import __version__
 from .db import (
     copy_database_files,
+    create_branch_database,
     create_snapshot_database,
     database_exists,
     database_write_lock,
@@ -18,12 +19,15 @@ from .db import (
     get_database_oid,
     get_databases_with_snapshots,
     get_snapshot_record,
-    restore_database_from_snapshot,
     initialize_database,
     list_databases,
+    log_branch_operation,
+    register_branch_database,
     register_snapshot_database,
     register_source_database,
+    restore_database_from_snapshot,
 )
+from .change_capture import ChangeCaptureInstaller
 
 
 def run_command(command: list[str]) -> None:
@@ -36,6 +40,66 @@ def run_command(command: list[str]) -> None:
 def cli() -> None:
     """Manage PostgreSQL database snapshots."""
     initialize_database()
+
+
+@cli.command()
+@click.argument("database_name")
+@click.argument("branch_name")
+def branch(database_name: str, branch_name: str) -> None:
+    """Create a branch of DATABASE_NAME with the given BRANCH_NAME."""
+    try:
+        click.echo(f"Creating branch '{branch_name}' of database '{database_name}'...")
+        
+        # Get source database OID
+        source_oid = get_database_oid(database_name)
+        click.echo(f"Source database OID: {source_oid}")
+        
+        # Register source database in vka_databases table
+        register_source_database(database_name, source_oid)
+        click.echo(f"Registered source database '{database_name}' in vka_databases")
+        
+        # Ensure change-capture is installed on the source
+        installer = ChangeCaptureInstaller()
+        if installer.ensure_installed(database_name):
+            click.echo("Installed vkarious change-capture on source database")
+        else:
+            click.echo("vkarious change-capture already present on source database")
+
+        # Get PostgreSQL data directory
+        data_directory = get_data_directory()
+        click.echo(f"PostgreSQL data directory: {data_directory}")
+        
+        # Create new branch database and get its OID
+        branch_database_name, target_oid = create_branch_database(database_name, branch_name)
+        click.echo(f"Created branch database '{branch_database_name}' with OID: {target_oid}")
+        
+        # Lock the source database to prevent writes during copy
+        with database_write_lock(database_name):
+            click.echo(f"Acquired write lock on database '{database_name}'")
+            
+            # Copy database files
+            copy_database_files(data_directory, source_oid, target_oid)
+            click.echo("Database files copied successfully")
+
+        # Ensure change-capture is present on the new branch database as well
+        if installer.ensure_installed(branch_database_name):
+            click.echo("Installed vkarious change-capture on branch database")
+        else:
+            click.echo("vkarious change-capture already present on branch database")
+        
+        # Register branch database in vka_databases table
+        register_branch_database(branch_database_name, target_oid, source_oid)
+        click.echo(f"Registered branch '{branch_database_name}' in vka_databases with parent OID {source_oid}")
+        
+        # Log branch creation operation
+        log_branch_operation(source_oid, target_oid, branch_database_name)
+        click.echo(f"Logged branch creation operation to vka_log")
+        
+        click.echo(f"Branch completed successfully: {branch_database_name}")
+        
+    except Exception as e:
+        click.echo(f"Error creating branch: {e}", err=True)
+        raise click.ClickException(str(e))
 
 
 @cli.command()

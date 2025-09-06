@@ -1,6 +1,6 @@
 # vkarious
 
-vkarious is a tool to get snapshots of PostgreSQL databases.
+vkarious is a tool to create snapshots and branches of PostgreSQL databases.
 
 Important: This project is an active work-in-progress. Expect rapid changes, occasional instability, and breaking changes as features evolve. To get notified about updates, use the Watch button on the repository (choose "All Activity"). Manage your watch settings for this repo at: https://github.com/ybrs/vkarious/subscription
 
@@ -29,6 +29,11 @@ vkarious databases list
 Create a snapshot:
 ```bash
 vkarious snapshot database_name
+```
+
+Create a branch with a custom name:
+```bash
+vkarious branch database_name branch_name
 ```
 
 When `VKA_PG_DATA_PATH` is set, vkarious uses that directory for physical file operations instead of querying `SHOW data_directory` from PostgreSQL.

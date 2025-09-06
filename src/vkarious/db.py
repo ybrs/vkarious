@@ -135,6 +135,25 @@ def create_snapshot_database(source_database: str) -> tuple[str, int]:
     return snapshot_name, oid
 
 
+def create_branch_database(source_database: str, branch_name: str) -> tuple[str, int]:
+    """Create a new database for branch with user-provided branch name."""
+    # TODO: think. we might add a prefix, though git doesnt add any prefix. 
+    branch_database_name = f"{branch_name}"
+    
+    with connect() as conn:
+        # Set autocommit for CREATE DATABASE (required for PostgreSQL)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            # Create the new database
+            cur.execute(f'''CREATE DATABASE "{branch_database_name}" STRATEGY='FILE_COPY' ''')
+            
+            # Get the OID of the newly created database
+            cur.execute("SELECT oid FROM pg_database WHERE datname = %s", (branch_database_name,))
+            oid = cur.fetchone()[0]
+            
+    return branch_database_name, oid
+
+
 def copy_database_files(data_directory: str, source_oid: int, target_oid: int) -> None:
     """Copy database files from source to target using OIDs."""
     data_path = Path(data_directory)
@@ -149,31 +168,37 @@ def copy_database_files(data_directory: str, source_oid: int, target_oid: int) -
     if not target_path.exists():
         raise FileNotFoundError(f"Target database directory not found: {target_path}")
     
-    # Use cp -cR for copy-on-write if available (macOS/BSD), fallback to cp -r
+    # Check VKA_NOCOW environment variable to determine copy method
+    use_nocow = os.getenv("VKA_NOCOW") is not None
+    
+    subprocess.run(
+        ["rm", "-rf", str(target_path) + "/"],
+        check=True,
+        capture_output=True,
+        text=True
+    )
+
+    # Use regular cp if VKA_NOCOW is set, otherwise use cp -c for copy-on-write
+    cp_args = ["cp", "-r" if use_nocow else "-cR", str(source_path) + "/", str(target_path) + "/"]
+    
     try:
         subprocess.run(
-            ["rm", "-rf", str(target_path) + "/"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-
-
-        subprocess.run(
-            ["cp", "-cR", str(source_path) + "/", str(target_path) + "/"],
+            cp_args,
             check=True,
             capture_output=True,
             text=True
         )
     except subprocess.CalledProcessError:
-        raise
-        # Fallback to regular recursive copy if cp -c is not available
-        # subprocess.run(
-        #     ["cp", "-r", str(source_path) + "/", str(target_path) + "/"],
-        #     check=True,
-        #     capture_output=True,
-        #     text=True
-        # )
+        if not use_nocow:
+            # Fallback to regular recursive copy if cp -c is not available
+            subprocess.run(
+                ["cp", "-r", str(source_path) + "/", str(target_path) + "/"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        else:
+            raise
     
     # Remove pg_internal.init file from the copied directory
     pg_internal_init = target_path / "pg_internal.init"
@@ -418,6 +443,23 @@ def register_snapshot_database(snapshot_name: str, snapshot_oid: int, parent_oid
         conn.commit()
 
 
+def register_branch_database(branch_name: str, branch_oid: int, parent_oid: int) -> None:
+    """Register a branch database in vka_databases table."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            # Insert the branch database record
+            cur.execute("""
+                INSERT INTO vka_databases (oid, datname, parent, created_at, type, status) 
+                VALUES (%s, %s, %s, %s, 'branch', 'live')
+            """, (branch_oid, branch_name, parent_oid, datetime.now()))
+        conn.commit()
+
+
 def get_databases_with_snapshots() -> dict[str, dict]:
     """Get databases from vkarious metadata DB with their snapshots in parent-child relationship."""
     db_dsn = get_database_dsn()
@@ -557,6 +599,25 @@ def log_restore_operation(old_oid: int, new_oid: int, datname: str, operation: s
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (old_oid, new_oid, datname, operation, datetime.now(), status, error_description))
+            log_id = cur.fetchone()[0]
+        conn.commit()
+    return log_id
+
+
+def log_branch_operation(source_oid: int, branch_oid: int, branch_name: str, operation: str = "branch", status: str = "success") -> int:
+    """Log a branch creation operation to vka_log table and return the log ID."""
+    db_dsn = get_database_dsn()
+    conn_params = psycopg.conninfo.conninfo_to_dict(db_dsn)
+    conn_params['dbname'] = "vkarious"
+    target_dsn = psycopg.conninfo.make_conninfo(**conn_params)
+    
+    with psycopg.connect(target_dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO vka_log (old_oid, new_oid, datname, operation, created_at, started_at, finished_at, status) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (source_oid, branch_oid, branch_name, operation, datetime.now(), datetime.now(), datetime.now(), status))
             log_id = cur.fetchone()[0]
         conn.commit()
     return log_id
