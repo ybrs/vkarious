@@ -34,3 +34,16 @@
 ## Security & Configuration Tips
 - Configure `VKA_DATABASE` with a non-production DSN during development. Do not commit secrets.
 - Snapshot/restore operations can be destructive; test against disposable databases.
+
+## Change Data Capture & Branch Workflow
+1. Ensure a PostgreSQL server is running and that the Postgres data directory is reachable. Export:
+   - `VKA_DATABASE` to the target DSN.
+   - `VKA_PG_DATA_PATH` to the server's data directory.
+   - `VKA_NOCOW=1` when copy-on-write is unavailable.
+2. Create a source database with application tables.
+3. Run `uv run vkarious branch <source_db> <branch_name>`.
+   - The CLI registers the source, installs change-capture triggers, creates the branch, copies data files, fixes ownership, and installs change-capture on the branch.
+4. Verify triggers with:
+   - `SELECT tgname FROM pg_trigger WHERE tgname LIKE 'vka_%';`
+   - Insert rows into tables and check captured rows in `vka_cdc`.
+5. Consult `design-doc.md` for details on triggers and the capture function.
