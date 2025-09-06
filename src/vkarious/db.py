@@ -168,31 +168,37 @@ def copy_database_files(data_directory: str, source_oid: int, target_oid: int) -
     if not target_path.exists():
         raise FileNotFoundError(f"Target database directory not found: {target_path}")
     
-    # Use cp -cR for copy-on-write if available (macOS/BSD), fallback to cp -r
+    # Check VKA_NOCOW environment variable to determine copy method
+    use_nocow = os.getenv("VKA_NOCOW") is not None
+    
+    subprocess.run(
+        ["rm", "-rf", str(target_path) + "/"],
+        check=True,
+        capture_output=True,
+        text=True
+    )
+
+    # Use regular cp if VKA_NOCOW is set, otherwise use cp -c for copy-on-write
+    cp_args = ["cp", "-r" if use_nocow else "-cR", str(source_path) + "/", str(target_path) + "/"]
+    
     try:
         subprocess.run(
-            ["rm", "-rf", str(target_path) + "/"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-
-
-        subprocess.run(
-            ["cp", "-cR", str(source_path) + "/", str(target_path) + "/"],
+            cp_args,
             check=True,
             capture_output=True,
             text=True
         )
     except subprocess.CalledProcessError:
-        raise
-        # Fallback to regular recursive copy if cp -c is not available
-        # subprocess.run(
-        #     ["cp", "-r", str(source_path) + "/", str(target_path) + "/"],
-        #     check=True,
-        #     capture_output=True,
-        #     text=True
-        # )
+        if not use_nocow:
+            # Fallback to regular recursive copy if cp -c is not available
+            subprocess.run(
+                ["cp", "-r", str(source_path) + "/", str(target_path) + "/"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+        else:
+            raise
     
     # Remove pg_internal.init file from the copied directory
     pg_internal_init = target_path / "pg_internal.init"

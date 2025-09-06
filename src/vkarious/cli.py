@@ -27,6 +27,7 @@ from .db import (
     register_source_database,
     restore_database_from_snapshot,
 )
+from .change_capture import ChangeCaptureInstaller
 
 
 def run_command(command: list[str]) -> None:
@@ -57,6 +58,13 @@ def branch(database_name: str, branch_name: str) -> None:
         register_source_database(database_name, source_oid)
         click.echo(f"Registered source database '{database_name}' in vka_databases")
         
+        # Ensure change-capture is installed on the source
+        installer = ChangeCaptureInstaller()
+        if installer.ensure_installed(database_name):
+            click.echo("Installed vkarious change-capture on source database")
+        else:
+            click.echo("vkarious change-capture already present on source database")
+
         # Get PostgreSQL data directory
         data_directory = get_data_directory()
         click.echo(f"PostgreSQL data directory: {data_directory}")
@@ -72,6 +80,12 @@ def branch(database_name: str, branch_name: str) -> None:
             # Copy database files
             copy_database_files(data_directory, source_oid, target_oid)
             click.echo("Database files copied successfully")
+
+        # Ensure change-capture is present on the new branch database as well
+        if installer.ensure_installed(branch_database_name):
+            click.echo("Installed vkarious change-capture on branch database")
+        else:
+            click.echo("vkarious change-capture already present on branch database")
         
         # Register branch database in vka_databases table
         register_branch_database(branch_database_name, target_oid, source_oid)
