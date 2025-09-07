@@ -45,7 +45,17 @@ vkarious snapshots list
 
 Restore from a snapshot:
 ```bash
-vkarious restore database_name snapshot_id
+vkarious snapshots restore database_name snapshot_name
+```
+
+Delete a snapshot:
+```bash
+vkarious snapshots delete snapshot_name
+```
+
+Check version:
+```bash
+vkarious version
 ```
 
 # Example
