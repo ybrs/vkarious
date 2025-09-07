@@ -34,3 +34,12 @@
 ## Security & Configuration Tips
 - Configure `VKA_DATABASE` with a non-production DSN during development. Do not commit secrets.
 - Snapshot/restore operations can be destructive; test against disposable databases.
+
+## Integration Tests
+- Ensure PostgreSQL is running locally and accessible via a DSN.
+- Create a virtual environment and install dependencies:
+  - `uv venv --python /usr/bin/python3`
+  - `uv pip install -e . pytest`
+- Export a DSN for tests, e.g. `export VKA_DATABASE="postgresql:///postgres"`.
+- Run the DDL logging tests (using peer auth by invoking as the `postgres` user):
+  - `sudo -u postgres VKA_DATABASE=$VKA_DATABASE uv run pytest tests/test_ddl_integration.py -q`
