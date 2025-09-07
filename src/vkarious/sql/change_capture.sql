@@ -412,6 +412,38 @@ BEGIN
   END LOOP;
 END$$;
 
+-- Handle DROP commands via sql_drop event
+CREATE OR REPLACE FUNCTION vkarious.on_sql_drop() RETURNS event_trigger
+LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE 
+  r record;
+  v_sql_text text;
+BEGIN
+  -- Get the current query that triggered the drop
+  v_sql_text := current_query();
+  
+  FOR r IN SELECT * FROM pg_event_trigger_dropped_objects() LOOP
+    -- Only log table drops (and related types that get dropped with tables)
+    IF r.object_type IN ('table', 'partitioned table', 'table partition') THEN
+      INSERT INTO vkarious.ddl_log(
+        command_tag, 
+        object_type, 
+        schema_name, 
+        object_identity, 
+        phase, 
+        sql_text
+      ) VALUES (
+        'DROP TABLE',
+        r.object_type,
+        r.schema_name,
+        r.object_identity,
+        'end',
+        v_sql_text
+      );
+    END IF;
+  END LOOP;
+END$$;
+
 DROP EVENT TRIGGER IF EXISTS vkarious_ddl_start;
 CREATE EVENT TRIGGER vkarious_ddl_start ON ddl_command_start EXECUTE FUNCTION vkarious.ddl_start();
 
@@ -420,3 +452,6 @@ CREATE EVENT TRIGGER vkarious_ddl_end ON ddl_command_end EXECUTE FUNCTION vkario
 
 DROP EVENT TRIGGER IF EXISTS vkarious_table_rewrite;
 CREATE EVENT TRIGGER vkarious_table_rewrite ON table_rewrite EXECUTE FUNCTION vkarious.on_table_rewrite();
+
+DROP EVENT TRIGGER IF EXISTS vkarious_sql_drop;
+CREATE EVENT TRIGGER vkarious_sql_drop ON sql_drop EXECUTE FUNCTION vkarious.on_sql_drop();
