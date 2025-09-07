@@ -235,7 +235,7 @@ BEGIN
 END$$;
 
 
-
+-- TODO: this does not understand alter table 
 CREATE OR REPLACE FUNCTION vkarious.render_create_table_full(rel regclass) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
 DECLARE
@@ -359,8 +359,15 @@ BEGIN
         END IF;
       END IF;
 
+      -- For CREATE TABLE commands, generate the full table definition
+      -- For ALTER TABLE commands, use current_query() to get the actual ALTER statement
       IF rel_oid IS NOT NULL THEN
-        v_sql_text := vkarious.render_create_table_full(rel_oid::regclass);
+        IF r.command_tag = 'CREATE TABLE' THEN
+          v_sql_text := vkarious.render_create_table_full(rel_oid::regclass);
+        ELSE
+          -- For ALTER TABLE and other table commands, capture the actual SQL
+          v_sql_text := current_query();
+        END IF;
       END IF;
     ELSIF r.object_type IN ('view','materialized view') THEN
       v_sql_text := pg_get_viewdef(r.objid,true);
