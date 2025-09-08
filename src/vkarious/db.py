@@ -115,6 +115,11 @@ def database_write_lock(database_name: str) -> Iterator[None]:
             conn.commit()
         conn.close()
 
+def get_pg_major_version(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SHOW server_version")
+        version_str = cur.fetchone()[0]
+    return int(version_str.split('.')[0])
 
 def create_snapshot_database(source_database: str) -> tuple[str, int]:
     """Create a new database for snapshot with timestamp name."""
@@ -126,7 +131,11 @@ def create_snapshot_database(source_database: str) -> tuple[str, int]:
         conn.autocommit = True
         with conn.cursor() as cur:
             # Create the new database
-            cur.execute(f'''CREATE DATABASE "{snapshot_name}" STRATEGY='FILE_COPY' ''')
+            pg_version = get_pg_major_version(conn)
+            if pg_version < 15:
+                cur.execute(f'''CREATE DATABASE "{snapshot_name}" ''')
+            else:
+                cur.execute(f'''CREATE DATABASE "{snapshot_name}" STRATEGY='FILE_COPY' ''')
             
             # Get the OID of the newly created database
             cur.execute("SELECT oid FROM pg_database WHERE datname = %s", (snapshot_name,))
@@ -145,7 +154,11 @@ def create_branch_database(source_database: str, branch_name: str) -> tuple[str,
         conn.autocommit = True
         with conn.cursor() as cur:
             # Create the new database
-            cur.execute(f'''CREATE DATABASE "{branch_database_name}" STRATEGY='FILE_COPY' ''')
+            pg_version = get_pg_major_version(conn)
+            if pg_version < 15:
+                cur.execute(f'''CREATE DATABASE "{branch_database_name}" ''')
+            else:
+                cur.execute(f'''CREATE DATABASE "{branch_database_name}" STRATEGY='FILE_COPY' ''')
             
             # Get the OID of the newly created database
             cur.execute("SELECT oid FROM pg_database WHERE datname = %s", (branch_database_name,))
@@ -337,7 +350,11 @@ def create_database_with_strategy(database_name: str, strategy: str = "FILE_COPY
     with connect() as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(f'''CREATE DATABASE "{database_name}" STRATEGY='{strategy}' ''')
+            pg_version = get_pg_major_version(conn)
+            if pg_version < 15:
+                cur.execute(f'''CREATE DATABASE "{database_name}" ''')
+            else:
+                cur.execute(f'''CREATE DATABASE "{database_name}" STRATEGY='{strategy}' ''')
 
 
 def table_exists(table_name: str, database_name: str = "vkarious") -> bool:
