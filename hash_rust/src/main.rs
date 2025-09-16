@@ -66,7 +66,9 @@ fn table_estimates(client: &mut Client, schema: &str, table: &str) -> (u64,u64) 
     (row.get::<_,i64>(0) as u64, row.get::<_,i64>(1) as u64)
 }
 
+
 fn digest_table(client: &mut Client, schema: &str, table: &str) -> (String,u64,f64) {
+    let interval = std::env::var("VKA_BW_INTERVAL").ok().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
     let cols = list_columns(client, schema, table);
     if cols.is_empty() { return (String::new(), 0, 0.0); }
     let pk = list_pk_columns(client, schema, table);
@@ -79,20 +81,45 @@ fn digest_table(client: &mut Client, schema: &str, table: &str) -> (String,u64,f
     let sql = format!("COPY (SELECT {} FROM \"{}\".\"{}\" ORDER BY {}) TO STDOUT (FORMAT binary)",
                       select_list, schema.replace('"', "\"\""), table.replace('"', "\"\""), order_by);
     let mut reader = client.copy_out(sql.as_str()).unwrap();
-    let mut hasher = Hasher::new();
-    let t0 = Instant::now();
+    let mut hasher = blake3::Hasher::new();
+    let start_wall = std::time::Instant::now();
     let mut buf = [0u8; 1<<20];
     let mut streamed: u64 = 0;
+    let mut read_time_total: f64 = 0.0;
+    let mut last_tick = std::time::Instant::now();
+    let mut last_bytes: u64 = 0;
+    let mut read_time_since_last: f64 = 0.0;
     loop {
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => { hasher.update(&buf[..n]); streamed += n as u64; }
-            Err(_) => break,
+        let t0 = std::time::Instant::now();
+        let n = match reader.read(&mut buf) {
+            Ok(0) => 0,
+            Ok(n) => n,
+            Err(_) => 0,
+        };
+        let rd = t0.elapsed().as_secs_f64();
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+        streamed += n as u64;
+        read_time_total += rd;
+        read_time_since_last += rd;
+        if interval > 0 && last_tick.elapsed().as_secs_f64() >= interval as f64 {
+            let delta_bytes = streamed - last_bytes;
+            let inst_rate = if read_time_since_last > 0.0 { (delta_bytes as f64 / read_time_since_last) as u64 } else { 0 };
+            let avg_rate = if read_time_total > 0.0 { (streamed as f64 / read_time_total) as u64 } else { 0 };
+            let t = start_wall.elapsed().as_secs_f64();
+            println!(
+                "PG {}.{} t={:.1}s inst {}/s avg {}/s total {}",
+                schema, table, t, pretty_bytes(inst_rate), pretty_bytes(avg_rate), pretty_bytes(streamed)
+            );
+            last_tick = std::time::Instant::now();
+            last_bytes = streamed;
+            read_time_since_last = 0.0;
         }
     }
-    let dt = t0.elapsed().as_secs_f64();
+    let dt = start_wall.elapsed().as_secs_f64();
     (hasher.finalize().to_hex().to_string(), streamed, dt)
 }
+
 
 fn partition_round_robin<T: Clone>(v: &[T], k: usize) -> Vec<Vec<T>> {
     let mut parts = vec![Vec::new(); k];
