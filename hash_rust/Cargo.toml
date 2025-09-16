@@ -1,0 +1,9 @@
+[package]
+name = "db_table_hash"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+postgres = { version = "0.19", features = ["with-chrono-0_4"] }
+blake3 = "1.5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
