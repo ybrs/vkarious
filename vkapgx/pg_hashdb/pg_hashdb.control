@@ -1,0 +1,6 @@
+comment = 'pg_hashdb:  Created by pgrx'
+default_version = '@CARGO_VERSION@'
+module_pathname = 'pg_hashdb'
+relocatable = false
+superuser = true
+trusted = false

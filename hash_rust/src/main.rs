@@ -78,8 +78,12 @@ fn digest_table(client: &mut Client, schema: &str, table: &str) -> (String,u64,f
     } else {
         cols.iter().map(|c| format!("\"{}\"", c.replace('"', "\"\""))).collect::<Vec<_>>().join(", ")
     };
-    let sql = format!("COPY (SELECT {} FROM \"{}\".\"{}\" ORDER BY {}) TO STDOUT (FORMAT binary)",
-                      select_list, schema.replace('"', "\"\""), table.replace('"', "\"\""), order_by);
+    // let sql = format!("COPY (SELECT {} FROM \"{}\".\"{}\" ORDER BY {}) TO STDOUT (FORMAT binary)",
+    //                   select_list, schema.replace('"', "\"\""), table.replace('"', "\"\""), order_by);
+
+    let sql = format!("COPY (SELECT {} FROM \"{}\".\"{}\" ) TO STDOUT (FORMAT binary)",
+                      select_list, schema.replace('"', "\"\""), table.replace('"', "\"\""));
+
     let mut reader = client.copy_out(sql.as_str()).unwrap();
     let mut hasher = blake3::Hasher::new();
     let start_wall = std::time::Instant::now();
